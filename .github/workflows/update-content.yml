@@ -1,0 +1,65 @@
+name: Update LifeStream content
+
+# Runs every 2 days (and can be triggered manually from the Actions tab).
+# Fetches fresh movies / TV / anime + episode playlists and pushes the
+# refreshed data files straight back to the website repo.
+#
+# Credentials: the GitHub PAT and the website repo name live ONLY in
+# GitHub Actions secrets (GH_PAT, WEBSITE_REPO). Nothing sensitive is
+# stored in this public repository.
+
+on:
+  schedule:
+    - cron: "0 6 */2 * *" # every 2 days at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-content:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out website repo (auth via secret PAT)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ secrets.WEBSITE_REPO }}
+          token: ${{ secrets.GH_PAT }}
+          path: site
+          ref: main
+
+      - name: Set up Node 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+        working-directory: site
+
+      - name: Fetch new content (full catalog + episode playlists, incremental)
+        run: npm run update
+        working-directory: site
+
+      - name: Commit & push refreshed data
+        working-directory: site
+        run: |
+          git config user.name "lifestream-updater"
+          git config user.email "lifestream-updater@users.noreply.github.com"
+          git add data
+          if git diff --cached --quiet; then
+            echo "✔ No new content found."
+          else
+            git commit -m "Auto-update: new content $(date -u '+%Y-%m-%d %H:%M UTC')"
+            git push
+            echo "PUSHED=true" >> "$GITHUB_ENV"
+          fi
+      - name: Summary
+        run: |
+          if [ "$PUSHED" = "true" ]; then
+            echo "### New content pushed — Vercel will auto-deploy." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Nothing new upstream." >> "$GITHUB_STEP_SUMMARY"
+          fi
